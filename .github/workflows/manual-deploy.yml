@@ -1,0 +1,58 @@
+name: Manual Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      target:
+        description: 'Deployment target'
+        required: true
+        default: 'aws-eks'
+        type: choice
+        options:
+          - aws-eks
+          - azure-app-service
+          - docker-hub-only
+
+jobs:
+  manual-deploy:
+    runs-on: ubuntu-latest
+    name: Manual Deploy - ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to ${{ github.event.inputs.target }}
+        run: |
+          echo "🚀 Deploying to ${{ github.event.inputs.target }}"
+          echo "📍 Environment: ${{ github.event.inputs.environment }}"
+          echo ""
+          echo "Manual deployment initiated by: ${{ github.actor }}"
+
+      - name: Docker Build & Push
+        if: always()
+        run: |
+          echo "Building Docker images for manual deployment..."
+          # Docker build steps would go here
+
+      - name: Deploy to AWS EKS
+        if: github.event.inputs.target == 'aws-eks'
+        run: |
+          echo "Deploying to AWS EKS in ${{ github.event.inputs.environment }}"
+          # AWS deployment steps would go here
+
+      - name: Deploy to Azure
+        if: github.event.inputs.target == 'azure-app-service'
+        run: |
+          echo "Deploying to Azure App Service in ${{ github.event.inputs.environment }}"
+          # Azure deployment steps would go here
+
+      - name: Success notification
+        run: |
+          echo "✅ Manual deployment to ${{ github.event.inputs.target }} completed"

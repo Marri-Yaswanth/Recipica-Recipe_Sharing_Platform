@@ -1,18 +1,182 @@
 import express from 'express';
 import { query } from '../config/database.js';
+import { assertSupabaseReady, isSupabaseEnabled } from '../config/supabase.js';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const router = express.Router();
 
-// Initialize email transporter
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD
+function parseInstructions(value) {
+    if (Array.isArray(value)) {
+        return value.join('\n');
     }
-});
+
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    return '';
+}
+
+function parseIngredients(value) {
+    if (Array.isArray(value)) {
+        return value;
+    }
+
+    if (!value) {
+        return [];
+    }
+
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed : [value];
+        } catch {
+            return [value];
+        }
+    }
+
+    return [String(value)];
+}
+
+async function getUserById(userId) {
+    if (!isSupabaseEnabled) {
+        const users = await query('SELECT id, name, email FROM users WHERE id = ?', [userId]);
+        return users[0] || null;
+    }
+
+    const sb = assertSupabaseReady();
+    const { data, error } = await sb
+        .from('users')
+        .select('id, name, email')
+        .eq('id', userId)
+        .maybeSingle();
+
+    if (error) {
+        throw error;
+    }
+
+    return data || null;
+}
+
+async function getRecipesFromSupabase({ category, search }) {
+    const sb = assertSupabaseReady();
+    let recipesQuery = sb
+        .from('recipes')
+        .select('id, user_id, name, description, ingredients, instructions, category, diet_type, image_url, prep_time, cook_time, servings, status, created_at')
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+    if (category && category !== 'all') {
+        recipesQuery = recipesQuery.eq('category', category);
+    }
+
+    if (search) {
+        const escaped = String(search).trim().replace(/[%_]/g, '');
+        recipesQuery = recipesQuery.or(`name.ilike.%${escaped}%,description.ilike.%${escaped}%`);
+    }
+
+    const { data: recipes, error: recipesError } = await recipesQuery;
+    if (recipesError) {
+        throw recipesError;
+    }
+
+    const userIds = Array.from(new Set((recipes || []).map((recipe) => recipe.user_id).filter(Boolean)));
+    const recipeIds = (recipes || []).map((recipe) => recipe.id);
+
+    const [usersResponse, likesResponse] = await Promise.all([
+        userIds.length
+            ? sb.from('users').select('id, name, email').in('id', userIds)
+            : Promise.resolve({ data: [], error: null }),
+        recipeIds.length
+            ? sb.from('likes').select('recipe_id').in('recipe_id', recipeIds)
+            : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (usersResponse.error) {
+        throw usersResponse.error;
+    }
+
+    if (likesResponse.error) {
+        throw likesResponse.error;
+    }
+
+    const usersById = new Map((usersResponse.data || []).map((user) => [user.id, user]));
+    const likesByRecipeId = (likesResponse.data || []).reduce((acc, row) => {
+        acc[row.recipe_id] = (acc[row.recipe_id] || 0) + 1;
+        return acc;
+    }, {});
+
+    return (recipes || []).map((recipe) => {
+        const author = usersById.get(recipe.user_id) || {};
+
+        return {
+            ...recipe,
+            author_name: author.name || null,
+            author_email: author.email || null,
+            like_count: likesByRecipeId[recipe.id] || 0,
+        };
+    });
+}
+
+async function getRecipeByIdSupabase(id) {
+    const sb = assertSupabaseReady();
+    const { data, error } = await sb
+        .from('recipes')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+    if (error) {
+        throw error;
+    }
+
+    return data || null;
+}
+
+async function getRecipeWithAuthorByIdSupabase(id) {
+    const sb = assertSupabaseReady();
+    const recipe = await getRecipeByIdSupabase(id);
+
+    if (!recipe || recipe.status !== 'active') {
+        return null;
+    }
+
+    const author = await getUserById(recipe.user_id);
+
+    return {
+        ...recipe,
+        author_name: author?.name || null,
+        author_email: author?.email || null,
+    };
+}
+
+// Initialize email transporter
+function createTransporter() {
+    const emailUser = (process.env.EMAIL_USER || '').trim();
+    const emailPassword = (process.env.EMAIL_PASSWORD || '').replace(/\s+/g, '');
+
+    if (emailUser && emailPassword) {
+        return nodemailer.createTransport({
+            host: 'smtp.gmail.com',
+            port: 587,
+            secure: false,
+            requireTLS: true,
+            auth: {
+                user: emailUser,
+                pass: emailPassword
+            }
+        });
+    }
+
+    return nodemailer.createTransport({
+        jsonTransport: true
+    });
+}
 
 // Middleware to verify JWT token
 const verifyToken = (req, res, next) => {
@@ -35,6 +199,12 @@ const verifyToken = (req, res, next) => {
 router.get('/', async (req, res) => {
     try {
         const { category, search } = req.query;
+
+        if (isSupabaseEnabled) {
+            const recipes = await getRecipesFromSupabase({ category, search });
+            return res.json(recipes);
+        }
+
         let sql = `SELECT r.*, u.name as author_name, u.email as author_email,
                    (SELECT COUNT(*) FROM likes WHERE recipe_id = r.id) as like_count
                    FROM recipes r
@@ -55,8 +225,34 @@ router.get('/', async (req, res) => {
 
         sql += ' ORDER BY r.created_at DESC LIMIT 50';
 
-        const recipes = await query(sql, params);
-        res.json(recipes);
+        try {
+            const recipes = await query(sql, params);
+            res.json(recipes);
+        } catch (error) {
+            if (error.code === 'ER_NO_SUCH_TABLE') {
+                // Gracefully handle missing optional likes table in partially initialized databases.
+                let fallbackSql = `SELECT r.*, u.name as author_name, u.email as author_email,
+                                  0 as like_count
+                                  FROM recipes r
+                                  JOIN users u ON r.user_id = u.id
+                                  WHERE r.status = "active"`;
+
+                if (category && category !== 'all') {
+                    fallbackSql += ' AND r.category = ?';
+                }
+
+                if (search) {
+                    fallbackSql += ' AND (r.name LIKE ? OR r.description LIKE ?)';
+                }
+
+                fallbackSql += ' ORDER BY r.created_at DESC LIMIT 50';
+
+                const recipes = await query(fallbackSql, params);
+                return res.json(recipes);
+            }
+
+            throw error;
+        }
     } catch (error) {
         console.error('Error fetching recipes:', error);
         res.status(500).json({ error: 'Error fetching recipes' });
@@ -67,6 +263,12 @@ router.get('/', async (req, res) => {
 router.get('/category/:category', async (req, res) => {
     try {
         const { category } = req.params;
+
+        if (isSupabaseEnabled) {
+            const recipes = await getRecipesFromSupabase({ category, search: '' });
+            return res.json(recipes);
+        }
+
         const recipes = await query(
             'SELECT * FROM recipes WHERE category = ? AND status = "active" ORDER BY created_at DESC',
             [category]
@@ -82,6 +284,16 @@ router.get('/category/:category', async (req, res) => {
 router.get('/:id', async (req, res) => {
     try {
         const { id } = req.params;
+
+        if (isSupabaseEnabled) {
+            const recipe = await getRecipeByIdSupabase(id);
+            if (!recipe) {
+                return res.status(404).json({ error: 'Recipe not found' });
+            }
+
+            return res.json(recipe);
+        }
+
         const recipes = await query('SELECT * FROM recipes WHERE id = ?', [id]);
         
         if (recipes.length === 0) {
@@ -105,9 +317,43 @@ router.post('/', verifyToken, async (req, res) => {
         }
 
         // Get user info
-        const users = await query('SELECT id FROM users WHERE id = ?', [req.userId]);
-        if (users.length === 0) {
+        const user = await getUserById(req.userId);
+        if (!user) {
             return res.status(404).json({ error: 'User not found' });
+        }
+
+        if (isSupabaseEnabled) {
+            const validDietTypes = ['vegetarian', 'eggetarian', 'non-vegetarian'];
+            const finalDietType = validDietTypes.includes(dietType) ? dietType : 'vegetarian';
+            const sb = assertSupabaseReady();
+
+            const { data, error } = await sb
+                .from('recipes')
+                .insert({
+                    user_id: req.userId,
+                    name,
+                    description,
+                    ingredients: Array.isArray(ingredients) ? ingredients : parseIngredients(ingredients),
+                    instructions: parseInstructions(instructions),
+                    category,
+                    diet_type: finalDietType,
+                    image_url: imageUrl || null,
+                    prep_time: prepTime || 0,
+                    cook_time: cookTime || 0,
+                    servings: servings || 4,
+                    status: 'active',
+                })
+                .select('id')
+                .single();
+
+            if (error) {
+                throw error;
+            }
+
+            return res.status(201).json({
+                message: 'Recipe created successfully',
+                recipeId: data.id,
+            });
         }
 
         // Check if diet_type column exists
@@ -156,6 +402,37 @@ router.put('/:id', verifyToken, async (req, res) => {
         const { id } = req.params;
         const { name, description, ingredients, instructions, category, imageUrl, prepTime, cookTime, servings } = req.body;
 
+        if (isSupabaseEnabled) {
+            const sb = assertSupabaseReady();
+            const existing = await getRecipeByIdSupabase(id);
+
+            if (!existing || Number(existing.user_id) !== Number(req.userId)) {
+                return res.status(404).json({ error: 'Recipe not found or unauthorized' });
+            }
+
+            const { error } = await sb
+                .from('recipes')
+                .update({
+                    name,
+                    description,
+                    ingredients: Array.isArray(ingredients) ? ingredients : parseIngredients(ingredients),
+                    instructions: parseInstructions(instructions),
+                    category,
+                    image_url: imageUrl || null,
+                    prep_time: prepTime || 0,
+                    cook_time: cookTime || 0,
+                    servings: servings || 4,
+                })
+                .eq('id', id)
+                .eq('user_id', req.userId);
+
+            if (error) {
+                throw error;
+            }
+
+            return res.json({ message: 'Recipe updated successfully' });
+        }
+
         // Check if recipe exists and belongs to user
         const recipes = await query('SELECT * FROM recipes WHERE id = ? AND user_id = ?', [id, req.userId]);
         if (recipes.length === 0) {
@@ -179,6 +456,27 @@ router.delete('/:id', verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
 
+        if (isSupabaseEnabled) {
+            const sb = assertSupabaseReady();
+            const existing = await getRecipeByIdSupabase(id);
+
+            if (!existing || Number(existing.user_id) !== Number(req.userId)) {
+                return res.status(404).json({ error: 'Recipe not found or unauthorized' });
+            }
+
+            const { error } = await sb
+                .from('recipes')
+                .delete()
+                .eq('id', id)
+                .eq('user_id', req.userId);
+
+            if (error) {
+                throw error;
+            }
+
+            return res.json({ message: 'Recipe deleted successfully' });
+        }
+
         // Check if recipe exists and belongs to user
         const recipes = await query('SELECT * FROM recipes WHERE id = ? AND user_id = ?', [id, req.userId]);
         if (recipes.length === 0) {
@@ -193,6 +491,132 @@ router.delete('/:id', verifyToken, async (req, res) => {
     }
 });
 
+// Share a recipe by email to another recipient
+router.post('/share-email', verifyToken, async (req, res) => {
+    try {
+        const { recipeId, recipe, recipientEmail, note } = req.body;
+
+        if (!recipientEmail) {
+            return res.status(400).json({ error: 'Recipient email is required' });
+        }
+
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(recipientEmail)) {
+            return res.status(400).json({ error: 'Recipient email is invalid' });
+        }
+
+        let selectedRecipe = null;
+
+        if (recipeId) {
+            if (isSupabaseEnabled) {
+                selectedRecipe = await getRecipeWithAuthorByIdSupabase(recipeId);
+            } else {
+                const recipes = await query(
+                    `SELECT r.*, u.name as author_name, u.email as author_email
+                     FROM recipes r
+                     JOIN users u ON r.user_id = u.id
+                     WHERE r.id = ? AND r.status = 'active'`,
+                    [recipeId]
+                );
+
+                if (recipes.length > 0) {
+                    selectedRecipe = recipes[0];
+                }
+            }
+        } else if (recipe) {
+            selectedRecipe = recipe;
+        }
+
+        if (!selectedRecipe && recipe) {
+            selectedRecipe = recipe;
+        }
+
+        if (!selectedRecipe) {
+            return res.status(400).json({ error: 'Recipe data is required' });
+        }
+
+        const ingredients = Array.isArray(selectedRecipe.ingredients)
+            ? selectedRecipe.ingredients
+            : (() => {
+                try {
+                    return JSON.parse(selectedRecipe.ingredients || '[]');
+                } catch {
+                    return [String(selectedRecipe.ingredients || '')].filter(Boolean);
+                }
+            })();
+
+        const instructions = Array.isArray(selectedRecipe.instructions)
+            ? selectedRecipe.instructions
+            : (() => {
+                try {
+                    return JSON.parse(selectedRecipe.instructions || '[]');
+                } catch {
+                    return [String(selectedRecipe.instructions || '')].filter(Boolean);
+                }
+            })();
+
+        const ingredientsList = ingredients.map((item) => `<li>${item}</li>`).join('');
+        const instructionsList = instructions.map((item, index) => `<li><strong>Step ${index + 1}:</strong> ${item}</li>`).join('');
+        const safeNote = note ? `<p style="margin-top: 16px;"><strong>Personal note:</strong> ${note}</p>` : '';
+        const senderName = req.userEmail || 'A Recipica user';
+        const transporter = createTransporter();
+        const fromEmail = process.env.EMAIL_USER || 'no-reply@recipica.local';
+
+        const sendResult = await transporter.sendMail({
+            from: fromEmail,
+            to: recipientEmail,
+            subject: `Recipe shared with you: ${selectedRecipe.name}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 24px; background: #faf7f0; border: 1px solid #e8dcc8; border-radius: 14px;">
+                    <h1 style="margin-top: 0; color: #a63c3c;">${selectedRecipe.name}</h1>
+                    <p>Shared by <strong>${senderName}</strong></p>
+                    <p>${selectedRecipe.description || ''}</p>
+                    ${safeNote}
+                    <p><strong>Category:</strong> ${selectedRecipe.category || 'Uncategorized'}</p>
+                    <p><strong>Prep time:</strong> ${selectedRecipe.prep_time || selectedRecipe.prepTime || 'N/A'} minutes</p>
+                    <p><strong>Cook time:</strong> ${selectedRecipe.cook_time || selectedRecipe.cookTime || 'N/A'}</p>
+                    <p><strong>Servings:</strong> ${selectedRecipe.servings || 'N/A'}</p>
+                    <h3>Ingredients</h3>
+                    <ul>${ingredientsList}</ul>
+                    <h3>Instructions</h3>
+                    <ol>${instructionsList}</ol>
+                </div>
+            `
+        });
+
+        const response = { message: 'Recipe shared successfully' };
+
+        if (sendResult?.messageId) {
+            response.messageId = sendResult.messageId;
+        }
+
+        if (sendResult?.envelope) {
+            response.envelope = sendResult.envelope;
+        }
+
+        if (sendResult?.message) {
+            response.preview = sendResult.message.toString();
+        }
+
+        res.json(response);
+    } catch (error) {
+        console.error('Error sharing recipe by email:', error);
+        let errorMessage = 'Error sharing recipe by email';
+
+        if (error.code === 'EAUTH') {
+            errorMessage = 'Email authentication failed. Use a Gmail App Password in EMAIL_PASSWORD.';
+        } else if (error.code === 'ECONNECTION' || error.code === 'ETIMEDOUT') {
+            errorMessage = 'Could not connect to the email server. Check internet or SMTP settings.';
+        } else if (error.responseCode === 535) {
+            errorMessage = 'Gmail rejected the login. Enable 2-Step Verification and use a 16-character App Password.';
+        } else if (error.responseCode === 550 || error.responseCode === 553) {
+            errorMessage = 'Recipient email address was rejected by the mail server.';
+        }
+
+        res.status(500).json({ error: errorMessage });
+    }
+});
+
 // Send recipe email
 router.post('/send-recipe-email', verifyToken, async (req, res) => {
     try {
@@ -202,10 +626,10 @@ router.post('/send-recipe-email', verifyToken, async (req, res) => {
         
         // If email not in token, fetch from database
         if (!userEmail && req.userId) {
-            const users = await query('SELECT email, name FROM users WHERE id = ?', [req.userId]);
-            if (users.length > 0) {
-                userEmail = users[0].email;
-                userName = userName || users[0].name;
+            const user = await getUserById(req.userId);
+            if (user) {
+                userEmail = user.email;
+                userName = userName || user.name;
             }
         }
         

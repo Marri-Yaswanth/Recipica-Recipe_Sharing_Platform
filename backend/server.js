@@ -12,6 +12,7 @@ import recipeRoutes from './routes/recipes.js';
 import userRoutes from './routes/users.js';
 import likesRoutes from './routes/likes.js';
 import followsRoutes from './routes/follows.js';
+import recommendationRoutes from './routes/recommendation.js';
 
 dotenv.config();
 
@@ -33,6 +34,7 @@ app.use('/api/recipes', recipeRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/likes', likesRoutes);
 app.use('/api/follows', followsRoutes);
+app.use('/api/recommend-recipes', recommendationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -41,12 +43,14 @@ app.get('/api/health', (req, res) => {
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
+    const clientBuildPath = path.join(__dirname, '..', 'frontend', 'build');
+
     // Serve static files from React build
-    app.use(express.static(path.join(__dirname, 'client/build')));
+    app.use(express.static(clientBuildPath));
     
     // Handle React routing, return all requests to React app
     app.get('*', (req, res) => {
-        res.sendFile(path.join(__dirname, 'client/build', 'index.html'));
+        res.sendFile(path.join(clientBuildPath, 'index.html'));
     });
 }
 

@@ -133,19 +133,37 @@ router.post('/forgot-password', async (req, res) => {
         const resetToken = jwt.sign({ email }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '1h' });
 
         // Send email
-        const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
-        
-        await transporter.sendMail({
-            to: email,
-            subject: 'Password Reset Request',
-            html: `
-                <p>You requested a password reset</p>
-                <p>Click the link below to reset your password (valid for 1 hour):</p>
-                <a href="${resetLink}">${resetLink}</a>
-            `
-        });
+        const clientUrl = req.headers.origin || process.env.CLIENT_URL || 'http://localhost:3000';
+        const resetLink = `${clientUrl}/?mode=reset-password&token=${resetToken}`;
 
-        res.json({ message: 'Password reset link sent to email' });
+        let emailSent = false;
+        let deliveryWarning = '';
+
+        if (process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
+            try {
+                await transporter.sendMail({
+                    to: email,
+                    subject: 'Password Reset Request',
+                    html: `
+                        <p>You requested a password reset</p>
+                        <p>Click the link below to reset your password (valid for 1 hour):</p>
+                        <a href="${resetLink}">${resetLink}</a>
+                    `
+                });
+                emailSent = true;
+            } catch (mailError) {
+                console.error('Password reset email delivery failed:', mailError);
+                deliveryWarning = 'Email delivery failed, but a reset link was generated.';
+            }
+        } else {
+            deliveryWarning = 'Email credentials are not configured, so only the reset link was generated.';
+        }
+
+        res.json({
+            message: emailSent ? 'Password reset link sent to email' : 'Password reset link generated',
+            resetLink,
+            warning: deliveryWarning || undefined
+        });
     } catch (error) {
         console.error('Forgot password error:', error);
         res.status(500).json({ error: 'Server error during password reset request' });

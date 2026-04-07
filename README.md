@@ -7,7 +7,7 @@ A full-stack recipe sharing platform combining the best features from both recip
 This project merges two recipe platforms into one cohesive application:
 - **Frontend**: React 18.3.1 with React Router, Context API, and modern UI components
 - **Backend**: Express.js REST API replacing the original PHP backend
-- **Database**: MySQL with proper schema and relationships
+- **Database**: MySQL by default, with optional Supabase Postgres integration
 - **Authentication**: JWT-based auth with bcrypt password hashing
 - **Email**: Nodemailer integration for password reset and notifications
 
@@ -44,25 +44,18 @@ This project merges two recipe platforms into one cohesive application:
 
 ```
 recipe-platform-combined/
-├── server.js                 # Express server entry point
-├── package.json              # Server dependencies
-├── .env.example              # Environment variables template
-├── database.sql              # MySQL database schema
-├── config/
-│   └── database.js           # Database connection configuration
-├── routes/
-│   ├── auth.js               # Authentication routes (signup, login, forgot password)
-│   ├── recipes.js            # Recipe CRUD operations
-│   └── users.js              # User profile management
-└── client/                   # React frontend
-    ├── package.json          # Client dependencies
-    ├── public/               # Static assets
-    └── src/
-        ├── components/       # React components (Login, Navbar, Recipe, etc.)
-        ├── services/         # API service layer
-        ├── stylesSheets/     # CSS files
-        ├── images/           # Image assets
-        └── jsonFiles/        # Recipe JSON data
+├── backend/                  # Express backend
+│   ├── server.js             # Express server entry point
+│   ├── package.json          # Backend dependencies
+│   ├── .env.example          # Environment variables template
+│   ├── database.sql          # MySQL database schema
+│   ├── config/
+│   └── routes/
+├── frontend/                 # React frontend
+│   ├── package.json          # Frontend dependencies
+│   ├── public/
+│   └── src/
+└── docs/                     # Consolidated and archived markdown docs
 ```
 
 ## 🚀 Getting Started
@@ -71,7 +64,7 @@ recipe-platform-combined/
 
 - **Node.js** (v16+ recommended)
 - **npm** or **yarn**
-- **MySQL** (v5.7+ or v8.0+)
+- **MySQL** (v5.7+ or v8.0+) or **Supabase** project
 - **Git**
 
 ### Installation
@@ -81,19 +74,23 @@ recipe-platform-combined/
 cd "/Users/yashu/Desktop/untitled folder/recipe-platform-combined"
 ```
 
-2. **Install server dependencies**
+2. **Install backend dependencies**
 ```bash
-npm install
-```
-
-3. **Install client dependencies**
-```bash
-cd client
+cd backend
 npm install
 cd ..
 ```
 
-4. **Setup MySQL database**
+3. **Install client dependencies**
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+4. **Setup database**
+
+Option A: MySQL (default)
 
 Create a new database:
 ```bash
@@ -104,14 +101,22 @@ exit;
 
 Import the schema:
 ```bash
-mysql -u root -p recipe_platform < database.sql
+mysql -u root -p recipe_platform < backend/database.sql
+```
+
+Option B: Supabase
+```bash
+# 1) In Supabase SQL editor, run backend/supabase-schema.sql.
+# 2) Ensure these tables exist: users, recipes, likes.
 ```
 
 5. **Configure environment variables**
 
-Create `.env` file in the root directory:
+Create `.env` file in the backend directory:
 ```bash
+cd backend
 cp .env.example .env
+cd ..
 ```
 
 Edit `.env` with your configuration:
@@ -124,6 +129,11 @@ DB_USER=root
 DB_PASSWORD=your_mysql_password
 DB_NAME=recipe_platform
 
+DB_PROVIDER=mysql
+USE_SUPABASE=false
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+
 JWT_SECRET=your-secret-key-change-this-to-random-string
 
 EMAIL_USER=your-email@gmail.com
@@ -132,25 +142,36 @@ EMAIL_PASSWORD=your-gmail-app-password
 CLIENT_URL=http://localhost:3000
 ```
 
+To enable Supabase, update `.env` like this:
+```env
+DB_PROVIDER=supabase
+USE_SUPABASE=true
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+```
+
 **Note**: For Gmail, you need to create an [App Password](https://support.google.com/accounts/answer/185833) instead of using your regular password.
 
 ### Running the Application
 
 **Option 1: Run both server and client concurrently**
 ```bash
+cd backend
 npm run concurrently
+cd ..
 ```
 
 **Option 2: Run separately**
 
 Terminal 1 - Backend:
 ```bash
+cd backend
 npm run dev
 ```
 
 Terminal 2 - Frontend:
 ```bash
-cd client
+cd frontend
 npm start
 ```
 
@@ -375,11 +396,13 @@ lsof -ti:3000 | xargs kill -9
 ### Module Not Found Errors
 ```bash
 # Reinstall dependencies
+cd backend
 rm -rf node_modules package-lock.json
 npm install
+cd ..
 
 # Client dependencies
-cd client
+cd frontend
 rm -rf node_modules package-lock.json
 npm install
 ```

@@ -1,0 +1,86 @@
+name: Deploy - AWS EKS
+
+on:
+  push:
+    branches: [main]
+    # Uncomment for production: only deploy on version tags
+    # tags:
+    #   - 'v*'
+  workflow_run:
+    workflows: ["Docker - Build & Push to Hub"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy-aws:
+    runs-on: ubuntu-latest
+    name: Deploy to AWS EKS
+    if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
+    environment:
+      name: production-aws
+      url: https://api.recipica.app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ secrets.EKS_CLUSTER_NAME }} \
+            --region ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace recipica --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create Docker registry secret
+        run: |
+          kubectl create secret docker-registry docker-registry-secret \
+            --docker-server=docker.io \
+            --docker-username=${{ secrets.DOCKERHUB_USERNAME }} \
+            --docker-password=${{ secrets.DOCKERHUB_TOKEN }} \
+            --docker-email=${{ secrets.DOCKER_EMAIL }} \
+            -n recipica \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy backend to EKS
+        run: |
+          kubectl set image deployment/recipica-backend \
+            recipica-backend=${{ secrets.DOCKERHUB_USERNAME }}/recipica-backend:latest \
+            -n recipica || kubectl apply -f k8s/backend-deployment.yaml
+
+      - name: Deploy frontend to EKS
+        run: |
+          kubectl set image deployment/recipica-frontend \
+            recipica-frontend=${{ secrets.DOCKERHUB_USERNAME }}/recipica-frontend:latest \
+            -n recipica || kubectl apply -f k8s/frontend-deployment.yaml
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/recipica-backend -n recipica --timeout=5m
+          kubectl rollout status deployment/recipica-frontend -n recipica --timeout=5m
+
+      - name: Verify deployment
+        run: |
+          echo "Backend pods:"
+          kubectl get pods -n recipica -l app=recipica-backend
+          echo ""
+          echo "Frontend pods:"
+          kubectl get pods -n recipica -l app=recipica-frontend
+
+      - name: Notify deployment success
+        run: |
+          echo "✅ Deployment to AWS EKS completed successfully"
+          echo "Backend: https://api.recipica.app"
+          echo "Frontend: https://recipica.app"
