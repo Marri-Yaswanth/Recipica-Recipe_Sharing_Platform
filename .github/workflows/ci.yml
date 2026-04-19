@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Food Delivery App
+name: CI/CD Pipeline - Recipica App
 
 on:
   push:
@@ -16,8 +16,8 @@ on:
 
 env:
   REGISTRY: docker.io
-  FRONTEND_IMAGE: ramana2003/quickbite-frontend
-  BACKEND_IMAGE: ramana2003/quickbite-backend
+  FRONTEND_IMAGE: yaswanth2408/frontend
+  BACKEND_IMAGE: yaswanth2408/backend
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -76,14 +76,14 @@ jobs:
           echo "CI/CD Pipeline Completed Successfully!"
           echo ""
           echo "Docker Images Built and Pushed:"
-          echo "   - Frontend: ramana2003/quickbite-frontend:latest"
-          echo "   - Frontend: ramana2003/quickbite-frontend:${{ github.sha }}"
-          echo "   - Backend: ramana2003/quickbite-backend:latest"
-          echo "   - Backend: ramana2003/quickbite-backend:${{ github.sha }}"
+          echo "   - Frontend: ${{ env.FRONTEND_IMAGE }}:latest"
+          echo "   - Frontend: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}"
+          echo "   - Backend: ${{ env.BACKEND_IMAGE }}:latest"
+          echo "   - Backend: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}"
           echo ""
           echo "Automated deployment commands executed:"
-          echo "   kubectl set image deployment/frontend frontend=ramana2003/quickbite-frontend:latest -n food-delivery"
-          echo "   kubectl set image deployment/backend backend=ramana2003/quickbite-backend:latest -n food-delivery"
+          echo "   kubectl set image deployment/frontend frontend=${{ env.FRONTEND_IMAGE }}:latest -n recipica"
+          echo "   kubectl set image deployment/backend backend=${{ env.BACKEND_IMAGE }}:latest -n recipica"
 
   # Deploy to Kubernetes (automated deployment to kubeadm)
   deploy:
@@ -107,17 +107,17 @@ jobs:
             set -e
 
             echo "Updating frontend deployment..."
-            kubectl set image deployment/frontend frontend=${{ env.FRONTEND_IMAGE }}:${{ github.sha }} -n food-delivery
+            kubectl set image deployment/frontend frontend=${{ env.FRONTEND_IMAGE }}:${{ github.sha }} -n recipica
 
             echo "Updating backend deployment..."
-            kubectl set image deployment/backend backend=${{ env.BACKEND_IMAGE }}:${{ github.sha }} -n food-delivery
+            kubectl set image deployment/backend backend=${{ env.BACKEND_IMAGE }}:${{ github.sha }} -n recipica
 
             echo "Waiting for rollout..."
-            kubectl rollout status deployment/frontend -n food-delivery --timeout=300s
-            kubectl rollout status deployment/backend -n food-delivery --timeout=300s
+            kubectl rollout status deployment/frontend -n recipica --timeout=300s
+            kubectl rollout status deployment/backend -n recipica --timeout=300s
 
             echo "Final Status:"
-            kubectl get pods -n food-delivery
+            kubectl get pods -n recipica
 
             echo "Deployment SUCCESS"
 
