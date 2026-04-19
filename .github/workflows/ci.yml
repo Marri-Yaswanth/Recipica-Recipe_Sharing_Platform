@@ -91,10 +91,17 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     steps:
+      - name: Validate deploy secrets
+        run: |
+          test -n "${{ secrets.EC2_HOST }}" || (echo "Missing secret: EC2_HOST" && exit 1)
+          test -n "${{ secrets.EC2_USER }}" || (echo "Missing secret: EC2_USER" && exit 1)
+          test -n "${{ secrets.EC2_SSH_KEY }}" || (echo "Missing secret: EC2_SSH_KEY" && exit 1)
+
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/ec2_key.pem
           chmod 600 ~/.ssh/ec2_key.pem
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
@@ -102,15 +109,20 @@ jobs:
         run: |
           echo "Deploying to Kubernetes..."
 
-          ssh -i ~/.ssh/ec2_key.pem -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
+          ssh -T -i ~/.ssh/ec2_key.pem \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}' BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}' GITHUB_SHA='${{ github.sha }}' bash -se" << 'EOF'
 
             set -e
 
             echo "Updating frontend deployment..."
-            kubectl set image deployment/frontend frontend=${{ env.FRONTEND_IMAGE }}:${{ github.sha }} -n recipica
+            kubectl set image deployment/frontend frontend=${FRONTEND_IMAGE}:${GITHUB_SHA} -n recipica
 
             echo "Updating backend deployment..."
-            kubectl set image deployment/backend backend=${{ env.BACKEND_IMAGE }}:${{ github.sha }} -n recipica
+            kubectl set image deployment/backend backend=${BACKEND_IMAGE}:${GITHUB_SHA} -n recipica
 
             echo "Waiting for rollout..."
             kubectl rollout status deployment/frontend -n recipica --timeout=300s
