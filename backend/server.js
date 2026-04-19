@@ -57,15 +57,19 @@ app.get('/metrics', async (req, res) => {
 app.get('/metrics', metricsEndpoint);
 
 // Serve static files in production
-if (process.env.NODE_ENV === 'production') {
-    const clientBuildPath = path.join(__dirname, '..', 'frontend', 'build');
+// if (process.env.NODE_ENV === 'production') {
+//     const clientBuildPath = path.join(__dirname, '..', 'frontend', 'build');
 
-    app.use(express.static(clientBuildPath));
+//     app.use(express.static(clientBuildPath));
 
-    app.get('*', (req, res) => {
-        res.sendFile(path.join(clientBuildPath, 'index.html'));
-    });
-}
+//     app.get('*', (req, res) => {
+//         res.sendFile(path.join(clientBuildPath, 'index.html'));
+//     });
+// }
+
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
 
 // Start server
 app.listen(PORT, () => {
