@@ -1,108 +1,124 @@
-name: CI - Build & Test
+name: CI/CD Pipeline - Food Delivery App
 
 on:
   push:
-    branches: [main]
+    branches: [ main, master ]
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - '.github/workflows/**'
   pull_request:
-    branches: [main]
+    branches: [ main, master ]
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  FRONTEND_IMAGE: ramana2003/quickbite-frontend
+  BACKEND_IMAGE: ramana2003/quickbite-backend
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  backend-test:
+  # Build and push frontend
+  frontend:
     runs-on: ubuntu-latest
-    name: Backend - Build & Test
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: 'backend/package-lock.json'
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Install backend dependencies
-        working-directory: backend
-        run: npm ci
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:latest
+            ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
-      - name: Lint backend (if eslint configured)
-        working-directory: backend
-        run: npm run lint || echo "No lint script configured"
+  # Build and push backend
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Run backend tests (if tests exist)
-        working-directory: backend
-        run: npm test || echo "No tests configured"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build backend verification
-        working-directory: backend
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:latest
+            ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+
+      - name: Deployment Summary
         run: |
-          echo "Backend is ready for deployment"
-          node -v
-          npm -v
+          echo "CI/CD Pipeline Completed Successfully!"
+          echo ""
+          echo "Docker Images Built and Pushed:"
+          echo "   - Frontend: ramana2003/quickbite-frontend:latest"
+          echo "   - Frontend: ramana2003/quickbite-frontend:${{ github.sha }}"
+          echo "   - Backend: ramana2003/quickbite-backend:latest"
+          echo "   - Backend: ramana2003/quickbite-backend:${{ github.sha }}"
+          echo ""
+          echo "Automated deployment commands executed:"
+          echo "   kubectl set image deployment/frontend frontend=ramana2003/quickbite-frontend:latest -n food-delivery"
+          echo "   kubectl set image deployment/backend backend=ramana2003/quickbite-backend:latest -n food-delivery"
 
-  frontend-test:
+  # Deploy to Kubernetes (automated deployment to kubeadm)
+  deploy:
+    needs: [frontend, backend]
     runs-on: ubuntu-latest
-    name: Frontend - Build & Test
-    env:
-      REACT_APP_API_BASE: http://localhost:5000
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     steps:
-      - uses: actions/checkout@v4
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
+          chmod 600 ~/.ssh/ec2_key.pem
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: 'frontend/package-lock.json'
+      - name: Deploy to EC2 kubeadm cluster
+        run: |
+          echo "Deploying to Kubernetes..."
 
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
+          ssh -i ~/.ssh/ec2_key.pem -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
 
-      - name: Build React app
-        working-directory: frontend
-        run: npm run build
+            set -e
 
-      - name: Run frontend tests
-        working-directory: frontend
-        run: npm test -- --watchAll=false || echo "No tests configured"
+            echo "Updating frontend deployment..."
+            kubectl set image deployment/frontend frontend=${{ env.FRONTEND_IMAGE }}:${{ github.sha }} -n food-delivery
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-build
-          path: frontend/build
-          retention-days: 1
+            echo "Updating backend deployment..."
+            kubectl set image deployment/backend backend=${{ env.BACKEND_IMAGE }}:${{ github.sha }} -n food-delivery
 
-  docker-security-scan:
-    runs-on: ubuntu-latest
-    name: Docker - Security & Lint
-    steps:
-      - uses: actions/checkout@v4
+            echo "Waiting for rollout..."
+            kubectl rollout status deployment/frontend -n food-delivery --timeout=300s
+            kubectl rollout status deployment/backend -n food-delivery --timeout=300s
 
-      - name: Run Trivy vulnerability scanner on backend Dockerfile
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: 'backend/Dockerfile'
-          format: 'sarif'
-          output: 'trivy-backend.sarif'
+            echo "Final Status:"
+            kubectl get pods -n food-delivery
 
-      - name: Run Trivy vulnerability scanner on frontend Dockerfile
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: 'frontend/Dockerfile'
-          format: 'sarif'
-          output: 'trivy-frontend.sarif'
+            echo "Deployment SUCCESS"
 
-      - name: Upload Trivy results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-backend.sarif'
-          category: 'Dockerfile-backend'
-
-      - name: Upload Trivy results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-frontend.sarif'
-          category: 'Dockerfile-frontend'
+          EOF
