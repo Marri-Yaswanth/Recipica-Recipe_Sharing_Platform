@@ -13,8 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     name: Deploy to Azure
     if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
-    environment:
-      name: production-azure
     steps:
       - uses: actions/checkout@v4
 
@@ -27,13 +25,13 @@ jobs:
         uses: azure/webapps-deploy@v2
         with:
           app-name: ${{ secrets.AZURE_BACKEND_APP_NAME }}
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/recipica-backend:latest
+          images: yaswanth2408/recipica-backend:latest
 
       - name: Deploy frontend to Azure App Service / Static Web App
         uses: azure/webapps-deploy@v2
         with:
           app-name: ${{ secrets.AZURE_FRONTEND_APP_NAME }}
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/recipica-frontend:latest
+          images: yaswanth2408/recipica-frontend:latest
 
       - name: Verify Azure deployments
         run: |
