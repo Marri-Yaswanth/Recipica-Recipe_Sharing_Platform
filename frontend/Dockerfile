@@ -7,7 +7,7 @@ ENV REACT_APP_API_BASE=${REACT_APP_API_BASE}
 
 COPY package*.json ./
 
-RUN npm ci
+RUN npm install
 
 COPY . .
 
