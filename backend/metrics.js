@@ -1,9 +1,14 @@
 import client from "prom-client";
 
+// Create a registry
 const register = new client.Registry();
 
+// Default Node.js metrics (CPU, memory, event loop, etc.)
 client.collectDefaultMetrics({ register });
 
+/**
+ * HTTP Request Counter
+ */
 const httpRequestsTotal = new client.Counter({
   name: "http_requests_total",
   help: "Total number of HTTP requests",
@@ -11,6 +16,9 @@ const httpRequestsTotal = new client.Counter({
   registers: [register],
 });
 
+/**
+ * HTTP Error Counter
+ */
 const httpErrorsTotal = new client.Counter({
   name: "http_errors_total",
   help: "Total number of HTTP error responses",
@@ -18,6 +26,9 @@ const httpErrorsTotal = new client.Counter({
   registers: [register],
 });
 
+/**
+ * Request Duration Histogram
+ */
 const httpRequestDurationSeconds = new client.Histogram({
   name: "http_request_duration_seconds",
   help: "HTTP request duration in seconds",
@@ -26,17 +37,24 @@ const httpRequestDurationSeconds = new client.Histogram({
   registers: [register],
 });
 
+/**
+ * Resolve route safely (important for Express dynamic routes)
+ */
 function resolveRoute(req) {
   if (req.route?.path) return req.route.path;
   if (req.baseUrl && req.path) return `${req.baseUrl}${req.path}`;
   return req.originalUrl || req.path || "unknown";
 }
 
+/**
+ * Middleware to collect metrics
+ */
 export function metricsMiddleware(req, res, next) {
   const start = process.hrtime.bigint();
 
   res.on("finish", () => {
     const durationSeconds = Number(process.hrtime.bigint() - start) / 1e9;
+
     const labels = {
       method: req.method,
       route: resolveRoute(req),
@@ -54,15 +72,15 @@ export function metricsMiddleware(req, res, next) {
   next();
 }
 
+/**
+ * Metrics endpoint (/metrics)
+ */
 export function exposeMetricsEndpoint(app, path = "/metrics") {
-  app.get(path, async (_req, res, next) => {
-    try {
-      res.set("Content-Type", register.contentType);
-      res.end(await register.metrics());
-    } catch (error) {
-      next(error);
-    }
+  app.get(path, async (_req, res) => {
+    res.set("Content-Type", register.contentType);
+    res.end(await register.metrics());
   });
 }
 
+// export registry (optional debugging)
 export { register };
