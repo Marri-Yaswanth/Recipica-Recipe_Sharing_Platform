@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../config/database.js';
+import { assertSupabaseReady, isSupabaseEnabled } from '../config/supabase.js';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import passportConfig from '../config/passport.js';
@@ -37,6 +38,66 @@ function validateInput(name, email, password) {
     return '';
 }
 
+async function findUserByEmail(email) {
+    if (isSupabaseEnabled) {
+        const sb = assertSupabaseReady();
+        const { data, error } = await sb
+            .from('users')
+            .select('*')
+            .eq('email', email)
+            .maybeSingle();
+
+        if (error) {
+            throw error;
+        }
+
+        return data || null;
+    }
+
+    const users = await query('SELECT * FROM users WHERE email = ?', [email]);
+    return users[0] || null;
+}
+
+async function createUser(name, email, hashedPassword) {
+    if (isSupabaseEnabled) {
+        const sb = assertSupabaseReady();
+        const { data, error } = await sb
+            .from('users')
+            .insert({ name, email, password: hashedPassword })
+            .select('id, name, email')
+            .single();
+
+        if (error) {
+            throw error;
+        }
+
+        return data;
+    }
+
+    const result = await query('INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
+        [name, email, hashedPassword]);
+
+    return { id: result.insertId, name, email };
+}
+
+async function updatePasswordByEmail(email, hashedPassword) {
+    if (isSupabaseEnabled) {
+        const sb = assertSupabaseReady();
+        const { error } = await sb
+            .from('users')
+            .update({ password: hashedPassword })
+            .eq('email', email);
+
+        if (error) {
+            throw error;
+        }
+
+        return;
+    }
+
+    await query('UPDATE users SET password = ? WHERE email = ?', [hashedPassword, email]);
+}
+
 // Sign up
 router.post('/signup', async (req, res) => {
     try {
@@ -49,8 +110,8 @@ router.post('/signup', async (req, res) => {
         }
 
         // Check if user exists
-        const existingUser = await query('SELECT * FROM users WHERE email = ?', [email]);
-        if (existingUser.length > 0) {
+        const existingUser = await findUserByEmail(email);
+        if (existingUser) {
             return res.status(400).json({ error: 'Email already exists' });
         }
 
@@ -58,10 +119,8 @@ router.post('/signup', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create user
-        const result = await query('INSERT INTO users (name, email, password) VALUES (?, ?, ?)', 
-            [name, email, hashedPassword]);
-        
-        const userId = result.insertId;
+        const createdUser = await createUser(name, email, hashedPassword);
+        const userId = createdUser.id;
 
         // Generate JWT token
         const token = jwt.sign({ userId, email }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
@@ -87,12 +146,10 @@ router.post('/login', async (req, res) => {
         }
 
         // Find user
-        const users = await query('SELECT * FROM users WHERE email = ?', [email]);
-        if (users.length === 0) {
+        const user = await findUserByEmail(email);
+        if (!user) {
             return res.status(401).json({ error: 'Invalid email or password' });
         }
-
-        const user = users[0];
 
         // Compare password
         const passwordMatch = await bcrypt.compare(password, user.password);
@@ -124,8 +181,8 @@ router.post('/forgot-password', async (req, res) => {
         }
 
         // Check if user exists
-        const users = await query('SELECT * FROM users WHERE email = ?', [email]);
-        if (users.length === 0) {
+        const user = await findUserByEmail(email);
+        if (!user) {
             return res.status(404).json({ error: 'Email not found' });
         }
 
@@ -186,7 +243,7 @@ router.post('/reset-password', async (req, res) => {
         const hashedPassword = await bcrypt.hash(newPassword, 10);
 
         // Update password
-        await query('UPDATE users SET password = ? WHERE email = ?', [hashedPassword, decoded.email]);
+        await updatePasswordByEmail(decoded.email, hashedPassword);
 
         res.json({ message: 'Password reset successful' });
     } catch (error) {
