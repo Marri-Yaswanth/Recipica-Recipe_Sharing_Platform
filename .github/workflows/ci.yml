@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Recipica App
+name: CI/CD Pipeline - Food Delivery App
 
 on:
   push:
@@ -21,6 +21,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Build and push frontend
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -45,6 +46,7 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
+  # Build and push backend
   backend:
     runs-on: ubuntu-latest
     steps:
@@ -69,190 +71,59 @@ jobs:
             ${{ env.BACKEND_IMAGE }}:latest
             ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
 
-      - name: Build summary
+      - name: Deployment Summary
         run: |
-          echo "CI build completed."
-          echo "Frontend image: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}"
-          echo "Backend image:  ${{ env.BACKEND_IMAGE }}:${{ github.sha }}"
+          echo "CI/CD Pipeline Completed Successfully!"
+          echo ""
+          echo "Docker Images Built and Pushed:"
+          echo "   - Frontend: yaswanth2408/frontend:latest"
+          echo "   - Frontend: yaswanth2408/frontend:${{ github.sha }}"
+          echo "   - Backend: yaswanth2408/backend:latest"
+          echo "   - Backend: yaswanth2408/backend:${{ github.sha }}"
+          echo ""
+          echo "Automated deployment commands executed:"
+          echo "   kubectl set image deployment/frontend frontend=yaswanth2408/frontend:latest -n food-delivery"
+          echo "   kubectl set image deployment/backend backend=yaswanth2408/backend:latest -n food-delivery"
 
-  deploy-kubeadm-ec2:
+  # Deploy to Kubernetes (automated deployment to kubeadm)
+  deploy:
     needs: [frontend, backend]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     steps:
-      - name: Check required secrets for kubeadm deploy
-        id: precheck
-        run: |
-          if [ -n "${{ secrets.EC2_HOST }}" ] && [ -n "${{ secrets.EC2_USER }}" ] && [ -n "${{ secrets.EC2_SSH_KEY }}" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping kubeadm deploy because EC2 secrets are not fully configured."
-          fi
-
       - name: Setup SSH
-        if: steps.precheck.outputs.enabled == 'true'
         run: |
           mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
           printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/ec2_key.pem
           chmod 600 ~/.ssh/ec2_key.pem
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
       - name: Deploy to EC2 kubeadm cluster
-        if: steps.precheck.outputs.enabled == 'true'
         run: |
+          echo "Deploying to Kubernetes..."
+
           ssh -T -i ~/.ssh/ec2_key.pem \
             -o StrictHostKeyChecking=yes \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-            "FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}' BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}' GITHUB_SHA='${{ github.sha }}' bash -se" << 'EOF'
+            "FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}' BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}' bash -se" << 'EOF'
+
             set -e
 
-            echo "Updating frontend deployment image..."
-            kubectl set image deployment/frontend frontend=${FRONTEND_IMAGE}:${GITHUB_SHA} -n recipica
+            echo "Updating frontend deployment..."
+            kubectl set image deployment/frontend frontend=${FRONTEND_IMAGE}:latest -n food-delivery
 
-            echo "Updating backend deployment image..."
-            kubectl set image deployment/backend backend=${BACKEND_IMAGE}:${GITHUB_SHA} -n recipica
+            echo "Updating backend deployment..."
+            kubectl set image deployment/backend backend=${BACKEND_IMAGE}:latest -n food-delivery
 
             echo "Waiting for rollout..."
-            kubectl rollout status deployment/frontend -n recipica --timeout=300s
-            kubectl rollout status deployment/backend -n recipica --timeout=300s
+            kubectl rollout status deployment/frontend -n food-delivery --timeout=300s
+            kubectl rollout status deployment/backend -n food-delivery --timeout=300s
 
-            echo "Deployment SUCCESS (kubeadm)."
+            echo "Final Status:"
+            kubectl get pods -n food-delivery
+
+            echo "Deployment SUCCESS"
+
           EOF
-
-  deploy-docker-ec2:
-    needs: [frontend, backend]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-    steps:
-      - name: Check required secrets for Docker deploy
-        id: precheck
-        run: |
-          if [ -n "${{ secrets.DOCKER_EC2_HOST }}" ] && [ -n "${{ secrets.DOCKER_EC2_USER }}" ] && [ -n "${{ secrets.DOCKER_EC2_SSH_KEY }}" ] && [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping Docker deploy because required Docker EC2/Docker Hub secrets are not fully configured."
-          fi
-
-      - name: Setup SSH
-        if: steps.precheck.outputs.enabled == 'true'
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.DOCKER_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/docker_ec2_key.pem
-          chmod 600 ~/.ssh/docker_ec2_key.pem
-          ssh-keyscan -H ${{ secrets.DOCKER_EC2_HOST }} >> ~/.ssh/known_hosts
-
-      - name: Replace old running Docker containers with new images
-        if: steps.precheck.outputs.enabled == 'true'
-        run: |
-          ssh -T -i ~/.ssh/docker_ec2_key.pem \
-            -o StrictHostKeyChecking=yes \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            ${{ secrets.DOCKER_EC2_USER }}@${{ secrets.DOCKER_EC2_HOST }} \
-            "FRONTEND_IMAGE='${{ env.FRONTEND_IMAGE }}' BACKEND_IMAGE='${{ env.BACKEND_IMAGE }}' IMAGE_TAG='${{ github.sha }}' DOCKERHUB_USERNAME='${{ secrets.DOCKERHUB_USERNAME }}' DOCKERHUB_TOKEN='${{ secrets.DOCKERHUB_TOKEN }}' bash -se" << 'EOF'
-            set -e
-
-            echo "Logging in to Docker Hub..."
-            echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
-
-            echo "Pulling newly built images..."
-            docker pull ${BACKEND_IMAGE}:${IMAGE_TAG}
-            docker pull ${FRONTEND_IMAGE}:${IMAGE_TAG}
-
-            echo "Stopping and removing old backend container if it exists..."
-            docker ps -q -f name=recipica-backend | xargs -r docker stop
-            docker ps -aq -f name=recipica-backend | xargs -r docker rm
-
-            echo "Stopping and removing old frontend container if it exists..."
-            docker ps -q -f name=recipica-frontend | xargs -r docker stop
-            docker ps -aq -f name=recipica-frontend | xargs -r docker rm
-
-            echo "Ensuring app network exists..."
-            docker network create recipica-net >/dev/null 2>&1 || true
-
-            echo "Starting backend with new image..."
-            docker run -d \
-              --name recipica-backend \
-              --restart unless-stopped \
-              --network recipica-net \
-              -p 5000:5000 \
-              ${BACKEND_IMAGE}:${IMAGE_TAG}
-
-            echo "Starting frontend with new image..."
-            docker run -d \
-              --name recipica-frontend \
-              --restart unless-stopped \
-              --network recipica-net \
-              -p 80:80 \
-              ${FRONTEND_IMAGE}:${IMAGE_TAG}
-
-            echo "Cleaning dangling images..."
-            docker image prune -f
-
-            echo "Deployment SUCCESS (docker on EC2)."
-            docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-          EOF
-
-  deploy-aws-eks:
-    needs: [frontend, backend]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-    steps:
-      - name: Check required secrets for AWS EKS deploy
-        id: precheck
-        run: |
-          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] && [ -n "${{ secrets.AWS_REGION }}" ] && [ -n "${{ secrets.EKS_CLUSTER_NAME }}" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping AWS EKS deploy because AWS secrets are not fully configured."
-          fi
-
-      - name: Configure AWS credentials
-        if: steps.precheck.outputs.enabled == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Setup kubectl
-        if: steps.precheck.outputs.enabled == 'true'
-        uses: azure/setup-kubectl@v4
-
-      - name: Update kubeconfig for EKS
-        if: steps.precheck.outputs.enabled == 'true'
-        run: aws eks update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ secrets.AWS_REGION }}"
-
-      - name: Roll out new images on AWS EKS
-        if: steps.precheck.outputs.enabled == 'true'
-        run: |
-          set -e
-
-          kubectl set image deployment/frontend frontend=${{ env.FRONTEND_IMAGE }}:${{ github.sha }} -n recipica
-          kubectl set image deployment/backend backend=${{ env.BACKEND_IMAGE }}:${{ github.sha }} -n recipica
-
-          kubectl rollout status deployment/frontend -n recipica --timeout=300s
-          kubectl rollout status deployment/backend -n recipica --timeout=300s
-
-          echo "Deployment SUCCESS (AWS EKS)."
-
-  deployment-summary:
-    needs: [frontend, backend, deploy-kubeadm-ec2, deploy-docker-ec2, deploy-aws-eks]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Summary
-        run: |
-          echo "Pipeline complete."
-          echo "Frontend image: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}"
-          echo "Backend image:  ${{ env.BACKEND_IMAGE }}:${{ github.sha }}"
-          echo "kubeadm deploy result: ${{ needs.deploy-kubeadm-ec2.result }}"
-          echo "docker deploy result:  ${{ needs.deploy-docker-ec2.result }}"
-          echo "aws eks deploy result: ${{ needs.deploy-aws-eks.result }}"
