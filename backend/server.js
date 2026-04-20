@@ -54,6 +54,9 @@ app.get("/api/health", (req, res) => {
   res.json({ message: "Server is running!" });
 });
 
+app.get("/", (req, res) => {
+  res.send("API is running");
+});
 /**
  * Metrics endpoint
  */
