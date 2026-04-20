@@ -82,8 +82,8 @@ jobs:
           echo "   - Backend: yaswanth2408/backend:${{ github.sha }}"
           echo ""
           echo "Automated deployment commands executed:"
-          echo "   kubectl set image deployment/frontend frontend=yaswanth2408/frontend:latest -n food-delivery"
-          echo "   kubectl set image deployment/backend backend=yaswanth2408/backend:latest -n food-delivery"
+          echo "   kubectl set image deployment/frontend frontend=yaswanth2408/frontend:latest -n recipica"
+          echo "   kubectl set image deployment/backend backend=yaswanth2408/backend:latest -n recipica"
 
   # Deploy to Kubernetes (automated deployment to kubeadm)
   deploy:
@@ -112,17 +112,17 @@ jobs:
             set -e
 
             echo "Updating frontend deployment..."
-            kubectl set image deployment/frontend frontend=${FRONTEND_IMAGE}:latest -n food-delivery
+            kubectl set image deployment/frontend frontend=${FRONTEND_IMAGE}:latest -n recipica
 
             echo "Updating backend deployment..."
-            kubectl set image deployment/backend backend=${BACKEND_IMAGE}:latest -n food-delivery
+            kubectl set image deployment/backend backend=${BACKEND_IMAGE}:latest -n recipica
 
             echo "Waiting for rollout..."
-            kubectl rollout status deployment/frontend -n food-delivery --timeout=300s
-            kubectl rollout status deployment/backend -n food-delivery --timeout=300s
+            kubectl rollout status deployment/frontend -n recipica --timeout=300s
+            kubectl rollout status deployment/backend -n recipica --timeout=300s
 
             echo "Final Status:"
-            kubectl get pods -n food-delivery
+            kubectl get pods -n recipica
 
             echo "Deployment SUCCESS"
 
