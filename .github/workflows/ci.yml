@@ -42,6 +42,8 @@ jobs:
         with:
           context: ./frontend
           push: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+          build-args: |
+            REACT_APP_API_BASE=${{ vars.REACT_APP_API_BASE || 'http://localhost:8081' }}
           tags: |
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
