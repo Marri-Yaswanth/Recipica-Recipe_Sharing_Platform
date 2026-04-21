@@ -432,7 +432,7 @@ export default function App() {
                   </div>
                 </div>
                 <p className="eyebrow">Login required</p>
-                <h1>Sign in to unlock the recipe library.</h1>
+                <h1>Sign in to unlock the recipe .</h1>
                 <p className="hero-copy">
                   Recipica keeps the recipe collection private until you log in. Once inside, you can browse featured dishes, open full recipe details, and share them by email.
                 </p>
