@@ -66,6 +66,13 @@ a {
   box-shadow: 0 10px 20px rgba(214, 69, 69, 0.28);
 }
 
+.brand-image {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
 .brand-name {
   margin: 0;
   line-height: 1;

@@ -583,7 +583,7 @@ export default function App() {
         <>
           <header className="topbar">
             <div className="brand brand-logo">
-              <span className="brand-mark">R</span>
+              <img src="/logo.svg" alt="Recipica logo" className="brand-image" />
               <div>
                 <p className="brand-name">Recipica</p>
                 <p className="brand-tag">Recipe sharing platform</p>
